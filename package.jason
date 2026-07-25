@@ -1,7 +1,7 @@
 {
   "name": "tum-saving-group-backend",
   "version": "1.0.0",
-  "description": "Secure backend for TUM Saving Group with persistent data storage",
+  "description": "Enterprise backend for TUM Saving Group",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
