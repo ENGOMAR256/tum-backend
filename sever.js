@@ -9,7 +9,6 @@ app.use(express.json());
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 
-// 1. DEFAULT DATA: ONLY ADMIN, NO LUBEGA
 const defaultData = {
   users: [
     { id: 'U001', username: 'admin', password: 'admin123', role: 'admin', memberId: null, name: 'System Administrator' }
@@ -21,7 +20,6 @@ const defaultData = {
   logs: []
 };
 
-// Load data from file, or create it if it doesn't exist
 function loadData() {
   if (!fs.existsSync(DATA_FILE)) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
@@ -42,7 +40,6 @@ function saveData(data) {
 
 let db = loadData();
 
-// Audit Log Helper
 function logAction(user, action, details) {
   db.logs.unshift({
     timestamp: new Date().toLocaleString('en-UG'),
@@ -54,7 +51,7 @@ function logAction(user, action, details) {
   saveData(db);
 }
 
-// --- API ROUTES ---
+// ==================== API ROUTES ====================
 
 // Get all data
 app.get('/api/data', (req, res) => {
@@ -73,7 +70,7 @@ app.post('/api/login', (req, res) => {
   }
 });
 
-// Create Member & User (Saves permanently)
+// Create Member & User
 app.post('/api/members', (req, res) => {
   const { user, member, transaction, actorName } = req.body;
   db.users.push(user);
@@ -84,21 +81,20 @@ app.post('/api/members', (req, res) => {
   res.json({ success: true, user, member });
 });
 
-// Update User Profile (Fixes Admin credential updates)
+// Update User Profile
 app.put('/api/users/:id', (req, res) => {
   const { id } = req.params;
   const { username, name, password, phone, memberId } = req.body;
-  
+
   const userIndex = db.users.findIndex(u => u.id === id);
   if (userIndex === -1) return res.status(404).json({ success: false, message: 'User not found' });
 
   const oldUser = db.users[userIndex];
-  
   db.users[userIndex] = {
     ...oldUser,
     username: username || oldUser.username,
     name: name || oldUser.name,
-    password: password || oldUser.password,
+    password: password || oldUser.password
   };
 
   if (memberId) {
@@ -114,7 +110,7 @@ app.put('/api/users/:id', (req, res) => {
   res.json({ success: true, user: db.users[userIndex] });
 });
 
-// DELETE Member (Fully implemented and working)
+// Delete Member (Only way accounts are removed)
 app.delete('/api/members/:id', (req, res) => {
   const { id } = req.params;
   const user = db.users.find(u => u.memberId === id);
@@ -122,18 +118,14 @@ app.delete('/api/members/:id', (req, res) => {
 
   if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
 
-  // Remove member and associated user
   db.members = db.members.filter(m => m.id !== id);
   if (user) db.users = db.users.filter(u => u.id !== user.id);
-
-  // Clean up related data for a pristine system
   db.transactions = db.transactions.filter(t => t.memberId !== id);
   db.loans = db.loans.filter(l => l.memberId !== id);
   db.withdrawalRequests = db.withdrawalRequests.filter(w => w.memberId !== id);
 
   logAction('Admin', 'Delete Member', `Deleted member ${member.name} (${id})`);
   saveData(db);
-  
   res.json({ success: true, message: 'Member deleted successfully' });
 });
 
@@ -154,19 +146,15 @@ app.post('/api/transactions', (req, res) => {
   };
 
   db.transactions.push(newTx);
-
-  if (type === 'Deposit' || type === 'Share Capital') {
-    member.savings += parseFloat(amount);
-  } else if (type === 'Withdraw') {
-    member.savings -= parseFloat(amount);
-  }
+  if (type === 'Deposit' || type === 'Share Capital') member.savings += parseFloat(amount);
+  else if (type === 'Withdraw') member.savings -= parseFloat(amount);
 
   logAction(actorName, 'Transaction', `${type} of ${amount} for ${member.name}`);
   saveData(db);
   res.json({ success: true, transaction: newTx });
 });
 
-// Withdrawal Requests
+// Create Withdrawal Request
 app.post('/api/withdrawals', (req, res) => {
   const { memberId, memberName, amount, note, status, actorName } = req.body;
   const newReq = {
@@ -184,6 +172,7 @@ app.post('/api/withdrawals', (req, res) => {
   res.json({ success: true, request: newReq });
 });
 
+// Update Withdrawal Status
 app.put('/api/withdrawals/:id', (req, res) => {
   const { id } = req.params;
   const { status, deductFunds, actorName } = req.body;
@@ -214,9 +203,21 @@ app.put('/api/withdrawals/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// Loans
+// Request Loan (with 50,000 UGX eligibility check)
 app.post('/api/loans', (req, res) => {
   const { memberId, memberName, amount, rate, term, balance, originalBalance, status, actorName } = req.body;
+  const member = db.members.find(m => m.id === memberId);
+
+  if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
+
+  const totalEquity = member.savings + member.share;
+  if (totalEquity < 50000) {
+    return res.status(400).json({
+      success: false,
+      message: `Loan Denied: Member must have a minimum total equity (Savings + Share Capital) of UGX 50,000. Current equity: UGX ${totalEquity.toLocaleString()}`
+    });
+  }
+
   const newLoan = {
     id: 'L' + String(db.loans.length + 1).padStart(3, '0'),
     memberId,
@@ -234,6 +235,7 @@ app.post('/api/loans', (req, res) => {
   res.json({ success: true, loan: newLoan });
 });
 
+// Update Loan (Approve, Reject, Repay)
 app.put('/api/loans/:id', (req, res) => {
   const { id } = req.params;
   const { status, amount, actorName } = req.body;
@@ -241,12 +243,12 @@ app.put('/api/loans/:id', (req, res) => {
   if (loanIndex === -1) return res.status(404).json({ success: false });
 
   const loan = db.loans[loanIndex];
-  
+
   if (status) {
     loan.status = status;
     logAction(actorName, 'Update Loan Status', `Set ${id} to ${status}`);
   }
-  
+
   if (amount) {
     loan.balance -= parseFloat(amount);
     if (loan.balance <= 0) {
@@ -269,12 +271,26 @@ app.put('/api/loans/:id', (req, res) => {
   res.json({ success: true, loan });
 });
 
-// Reset System (Wipes everything except Admin)
+// Smart Reset: Wipes data but PRESERVES all user accounts
 app.post('/api/reset', (req, res) => {
-  db = JSON.parse(JSON.stringify(defaultData));
+  const preservedUsers = JSON.parse(JSON.stringify(db.users));
+  const preservedMembers = JSON.parse(JSON.stringify(db.members));
+
+  preservedMembers.forEach(m => {
+    m.savings = 0;
+    m.share = 0;
+  });
+
+  db.transactions = [];
+  db.loans = [];
+  db.withdrawalRequests = [];
+  db.logs = [];
+  db.users = preservedUsers;
+  db.members = preservedMembers;
+
   saveData(db);
-  logAction('System', 'Reset', 'System data wiped and reset to default');
-  res.json({ success: true, message: 'System reset successfully' });
+  logAction('System', 'Smart Reset', 'Transactional data wiped, ALL user accounts preserved');
+  res.json({ success: true, message: 'System data reset successfully. All user accounts have been preserved.' });
 });
 
 const PORT = process.env.PORT || 3000;
