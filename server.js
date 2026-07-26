@@ -53,14 +53,13 @@ function logAction(user, action, details) {
 
 // ==================== API ROUTES ====================
 
-// Get all data
 app.get('/api/data', (req, res) => {
   res.json(db);
 });
 
-// Login
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
+  // Strictly checks against the ONE active password
   const user = db.users.find(u => u.username === username && u.password === password);
   if (user) {
     logAction(user.username, 'Login', 'Successful login');
@@ -70,7 +69,6 @@ app.post('/api/login', (req, res) => {
   }
 });
 
-// Create Member & User
 app.post('/api/members', (req, res) => {
   const { user, member, transaction, actorName } = req.body;
   db.users.push(user);
@@ -81,7 +79,7 @@ app.post('/api/members', (req, res) => {
   res.json({ success: true, user, member });
 });
 
-// Update User Profile
+// 🔒 STRICT SINGLE PASSWORD ENFORCEMENT ROUTE
 app.put('/api/users/:id', (req, res) => {
   const { id } = req.params;
   const { username, name, password, phone, memberId } = req.body;
@@ -90,18 +88,26 @@ app.put('/api/users/:id', (req, res) => {
   if (userIndex === -1) return res.status(404).json({ success: false, message: 'User not found' });
 
   const oldUser = db.users[userIndex];
+  
+  // 🔒 STRICT RULE: An account can ONLY ever have ONE active password.
+  // If a new password is provided, it completely overwrites and destroys the old one.
+  let activePassword = oldUser.password; 
+  if (password && typeof password === 'string' && password.trim() !== '') {
+    activePassword = password.trim(); // Old password is permanently replaced
+  }
+
   db.users[userIndex] = {
     ...oldUser,
-    username: username || oldUser.username,
-    name: name || oldUser.name,
-    password: password || oldUser.password
+    username: (username && username.trim()) || oldUser.username,
+    name: (name && name.trim()) || oldUser.name,
+    password: activePassword // Only ONE password is ever stored
   };
 
   if (memberId) {
     const memberIndex = db.members.findIndex(m => m.id === memberId);
     if (memberIndex !== -1) {
-      db.members[memberIndex].phone = phone || db.members[memberIndex].phone;
-      db.members[memberIndex].name = name || db.members[memberIndex].name;
+      db.members[memberIndex].phone = (phone && phone.trim()) || db.members[memberIndex].phone;
+      db.members[memberIndex].name = (name && name.trim()) || db.members[memberIndex].name;
     }
   }
 
@@ -110,7 +116,6 @@ app.put('/api/users/:id', (req, res) => {
   res.json({ success: true, user: db.users[userIndex] });
 });
 
-// Delete Member (Only way accounts are removed)
 app.delete('/api/members/:id', (req, res) => {
   const { id } = req.params;
   const user = db.users.find(u => u.memberId === id);
@@ -129,7 +134,6 @@ app.delete('/api/members/:id', (req, res) => {
   res.json({ success: true, message: 'Member deleted successfully' });
 });
 
-// Add Transaction
 app.post('/api/transactions', (req, res) => {
   const { memberId, type, amount, note, actorName } = req.body;
   const member = db.members.find(m => m.id === memberId);
@@ -154,7 +158,6 @@ app.post('/api/transactions', (req, res) => {
   res.json({ success: true, transaction: newTx });
 });
 
-// Create Withdrawal Request
 app.post('/api/withdrawals', (req, res) => {
   const { memberId, memberName, amount, note, status, actorName } = req.body;
   const newReq = {
@@ -172,7 +175,6 @@ app.post('/api/withdrawals', (req, res) => {
   res.json({ success: true, request: newReq });
 });
 
-// Update Withdrawal Status
 app.put('/api/withdrawals/:id', (req, res) => {
   const { id } = req.params;
   const { status, deductFunds, actorName } = req.body;
@@ -203,7 +205,6 @@ app.put('/api/withdrawals/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// Request Loan (with 50,000 UGX eligibility check)
 app.post('/api/loans', (req, res) => {
   const { memberId, memberName, amount, rate, term, balance, originalBalance, status, actorName } = req.body;
   const member = db.members.find(m => m.id === memberId);
@@ -235,7 +236,6 @@ app.post('/api/loans', (req, res) => {
   res.json({ success: true, loan: newLoan });
 });
 
-// Update Loan (Approve, Reject, Repay)
 app.put('/api/loans/:id', (req, res) => {
   const { id } = req.params;
   const { status, amount, actorName } = req.body;
@@ -271,7 +271,6 @@ app.put('/api/loans/:id', (req, res) => {
   res.json({ success: true, loan });
 });
 
-// Smart Reset: Wipes data but PRESERVES all user accounts
 app.post('/api/reset', (req, res) => {
   const preservedUsers = JSON.parse(JSON.stringify(db.users));
   const preservedMembers = JSON.parse(JSON.stringify(db.members));
